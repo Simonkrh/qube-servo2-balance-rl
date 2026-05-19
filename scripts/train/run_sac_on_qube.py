@@ -47,12 +47,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Clip sent motor voltage. Defaults to the selected training/profile voltage limit.",
     )
-    parser.add_argument(
-        "--voltage-slew-rate",
-        type=float,
-        default=None,
-        help="Optional sent-voltage slew limit in V/s to reduce balancing chatter.",
-    )
     parser.add_argument("--warmup-seconds", type=float, default=0.1)
     parser.add_argument("--velocity-filter", type=float, default=0.35)
     parser.add_argument("--max-alpha-dot", type=float, default=50.0)
@@ -241,11 +235,6 @@ def main() -> None:
                 target_voltage = float(
                     np.clip(policy_voltage, -max_voltage, max_voltage)
                 )
-                if args.voltage_slew_rate is not None and dt > 0:
-                    max_delta = max(0.0, args.voltage_slew_rate) * dt
-                    target_voltage = last_voltage + float(
-                        np.clip(target_voltage - last_voltage, -max_delta, max_delta)
-                    )
                 sent_voltage = 0.0 if args.dry_run else target_voltage
 
                 qube.setMotorVoltage(sent_voltage)

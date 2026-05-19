@@ -141,7 +141,6 @@ Parameters:
 | `--seconds` | `10.0` | Run duration. |
 | `--rate` | `300.0` | Control loop rate in Hz. |
 | `--max-voltage` | Profile voltage limit | Optional sent-voltage clipping limit. |
-| `--voltage-slew-rate` | `None` | Optional sent-voltage slew limit in V/s. |
 | `--out` | `runs/real_sac_rollout.csv` | CSV output log path. |
 | `--dry-run` | `False` | Predict actions but send zero motor voltage. |
 
