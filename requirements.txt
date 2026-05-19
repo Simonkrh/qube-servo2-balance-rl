@@ -1,0 +1,10 @@
+pyserial
+PyQt5
+pyqtgraph
+numpy
+matplotlib
+pandas
+gymnasium
+stable-baselines3
+tensorboard
+pygame
