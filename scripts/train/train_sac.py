@@ -18,6 +18,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 from qube_sim.env import (
     QubeServo2SwingUpEnv,
+    make_left_recovery_balance_env,
     make_default_randomized_env,
     make_reference_upright_balance_env,
     make_reference_recovery_env,
@@ -159,6 +160,29 @@ def parse_args() -> argparse.Namespace:
         help="Train a direct SAC policy from upright with balance-focused reward and smooth voltage penalties.",
     )
     parser.add_argument(
+        "--left-recovery-profile",
+        action="store_true",
+        help=(
+            "Fine-tune balance recovery from near-upright left/right pushes with "
+            "extra left-side sampling, stronger arm centering, and actuator asymmetry randomization."
+        ),
+    )
+    parser.add_argument(
+        "--left-recovery-probability",
+        type=float,
+        default=0.7,
+        help="Fraction of recovery-profile resets that start on the negative-theta side.",
+    )
+    parser.add_argument(
+        "--recovery-reset-probability",
+        type=float,
+        default=0.5,
+        help=(
+            "Fraction of left-recovery-profile episodes that use near-upright recovery starts. "
+            "The rest use reference-profile swing-up starts."
+        ),
+    )
+    parser.add_argument(
         "--voltage-smoothness-weight",
         type=float,
         default=0.0,
@@ -205,6 +229,15 @@ def main() -> None:
         return env
 
     def make_env():
+        if args.left_recovery_profile:
+            env = make_left_recovery_balance_env(
+                disturbance_scale=args.disturbance_scale if args.recovery_disturbances else 0.0,
+                domain_randomization=not args.no_domain_randomization,
+                left_recovery_probability=args.left_recovery_probability,
+                recovery_reset_probability=args.recovery_reset_probability,
+            )
+            return Monitor(env)
+
         if args.upright_balance_profile:
             env = make_reference_upright_balance_env(
                 disturbance_scale=args.disturbance_scale if args.recovery_disturbances else 0.0,
@@ -282,12 +315,12 @@ def main() -> None:
             print(f"No replay buffer found. Searched: {searched}.")
         print(f"Resuming from {args.resume_from}; training for {args.timesteps} additional steps.")
     else:
-        reference_like = args.reference_profile or args.upright_balance_profile
+        reference_like = args.reference_profile or args.upright_balance_profile or args.left_recovery_profile
         buffer_size = 400_000 if reference_like else 300_000
         batch_size = 1024 if reference_like else 256
         tau = 0.005 if reference_like else 0.02
-        learning_starts = 2_000 if args.upright_balance_profile else 10_000
-        gamma = 0.995 if args.upright_balance_profile else 0.99
+        learning_starts = 2_000 if (args.upright_balance_profile or args.left_recovery_profile) else 10_000
+        gamma = 0.995 if (args.upright_balance_profile or args.left_recovery_profile) else 0.99
         model = SAC(
             "MlpPolicy",
             env,

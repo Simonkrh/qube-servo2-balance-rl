@@ -32,6 +32,9 @@ class QubeServo2Parameters:
     recommended_voltage_limit: float = 10.0
     maximum_voltage_limit: float = 15.0
     motor_voltage_scale: float = 1.0
+    positive_motor_voltage_scale: float = 1.0
+    negative_motor_voltage_scale: float = 1.0
+    motor_voltage_deadband: float = 0.0
 
     # Shaft attachment hub.
     hub_mass: float = 0.0106
