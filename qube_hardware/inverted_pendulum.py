@@ -1,5 +1,8 @@
 from QUBE import QUBE
 from control import COM_PORT
+import argparse
+import csv
+from pathlib import Path
 from time import sleep, time
 import numpy as np
 
@@ -53,6 +56,9 @@ t_reset = time()
 mode = 0
 lastMode = 0
 reset = False
+start_time = 0.0
+prev_log_angle = 0.0
+prev_log_time = 0.0
 
 
 def constrain(value, lower, upper):
@@ -142,7 +148,7 @@ def loop():
     now = time()
     dt = now - last
     if dt < target_dt:
-        return
+        return None
     last = now
 
     position = qube.getMotorAngle()
@@ -165,7 +171,7 @@ def loop():
             sleep(target_dt)
 
         reset = False
-        return
+        return None
 
     if mode == 0:
         swingup(angle, dt)
@@ -174,13 +180,57 @@ def loop():
 
     qube.update()
     lastMode = mode
+    return {
+        "time_s": now - start_time,
+        "theta_deg": qube.getMotorAngle(),
+        "alpha_deg": angle,
+        "theta_dot_rad": qube.getMotorRPM() * 2.0 * np.pi / 60.0,
+        "voltage_applied": qube.voltage,
+        "mode": "balance" if mode == 1 else "swingup",
+    }
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run and log the classical QUBE inverted pendulum controller.")
+    parser.add_argument("--seconds", type=float, default=6.0)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("../runs/classical_inverted_pendulum_hardware.csv"),
+    )
+    args = parser.parse_args()
+
     try:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
         setup()
-        while True:
-            loop()
+        start_time = time()
+        prev_log_time = start_time
+        prev_log_angle = pendulum_angle_top_zero()
+        fields = [
+            "time_s",
+            "theta_deg",
+            "alpha_deg",
+            "theta_dot_rad",
+            "alpha_dot_rad",
+            "voltage_applied",
+            "mode",
+        ]
+        with args.out.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            while time() - start_time < args.seconds:
+                sample = loop()
+                if sample is None:
+                    sleep(0.0005)
+                    continue
+                now = start_time + sample["time_s"]
+                dt = max(now - prev_log_time, 1e-9)
+                alpha_delta = ((sample["alpha_deg"] - prev_log_angle + 180.0) % 360.0) - 180.0
+                sample["alpha_dot_rad"] = np.deg2rad(alpha_delta) / dt
+                writer.writerow(sample)
+                prev_log_time = now
+                prev_log_angle = sample["alpha_deg"]
+        print(f"Wrote rollout log to {args.out}")
     except KeyboardInterrupt:
         print("Interrupted. Stopping motor.")
     finally:
