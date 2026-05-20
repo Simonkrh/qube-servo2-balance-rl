@@ -31,13 +31,17 @@ REFERENCE_RECOVERY_DISTURBANCES: DisturbanceConfig = {
 }
 
 
-def scaled_reference_recovery_disturbances(disturbance_scale: float = 1.0) -> DisturbanceConfig:
+def scaled_reference_recovery_disturbances(
+    disturbance_scale: float = 1.0,
+) -> DisturbanceConfig:
     disturbance_config = dict(REFERENCE_RECOVERY_DISTURBANCES)
     disturbance_config["arm_torque"] = tuple(
-        disturbance_scale * value for value in REFERENCE_RECOVERY_DISTURBANCES["arm_torque"]
+        disturbance_scale * value
+        for value in REFERENCE_RECOVERY_DISTURBANCES["arm_torque"]
     )
     disturbance_config["pendulum_torque"] = tuple(
-        disturbance_scale * value for value in REFERENCE_RECOVERY_DISTURBANCES["pendulum_torque"]
+        disturbance_scale * value
+        for value in REFERENCE_RECOVERY_DISTURBANCES["pendulum_torque"]
     )
     return disturbance_config
 
@@ -62,6 +66,18 @@ class QubeServo2SwingUpEnv(gym.Env):
         upright_voltage_smoothness_weight: float = 0.0,
         voltage_penalty_weight: float = 0.02,
         reward_profile: str = "swingup",
+        left_recovery_probability: float = 0.5,
+        recovery_theta_abs_range: tuple[float, float] = (
+            np.deg2rad(5.0),
+            np.deg2rad(25.0),
+        ),
+        recovery_alpha_range: tuple[float, float] = (-np.deg2rad(8.0), np.deg2rad(8.0)),
+        recovery_theta_dot_range: tuple[float, float] = (-2.0, 2.0),
+        recovery_alpha_dot_range: tuple[float, float] = (-5.0, 5.0),
+        recovery_reset_probability: float = 1.0,
+        arm_center_deadband: float = np.deg2rad(3.0),
+        arm_centering_weight: float = 0.0,
+        upright_arm_centering_weight: float = 0.0,
     ) -> None:
         self.base_params = params or QubeServo2Parameters()
         self.params = self.base_params
@@ -77,6 +93,15 @@ class QubeServo2SwingUpEnv(gym.Env):
         self.upright_voltage_smoothness_weight = upright_voltage_smoothness_weight
         self.voltage_penalty_weight = voltage_penalty_weight
         self.reward_profile = reward_profile
+        self.left_recovery_probability = left_recovery_probability
+        self.recovery_theta_abs_range = recovery_theta_abs_range
+        self.recovery_alpha_range = recovery_alpha_range
+        self.recovery_theta_dot_range = recovery_theta_dot_range
+        self.recovery_alpha_dot_range = recovery_alpha_dot_range
+        self.recovery_reset_probability = recovery_reset_probability
+        self.arm_center_deadband = arm_center_deadband
+        self.arm_centering_weight = arm_centering_weight
+        self.upright_arm_centering_weight = upright_arm_centering_weight
 
         action_bound = 1.0 if normalized_action else self.base_params.voltage_limit
         self.action_space = spaces.Box(
@@ -112,22 +137,44 @@ class QubeServo2SwingUpEnv(gym.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         options = options or {}
-        self.params = self.base_params.randomized(self.np_random, self.domain_randomization)
+        self.params = self.base_params.randomized(
+            self.np_random, self.domain_randomization
+        )
 
         if "state" in options:
             self.state = np.array(options["state"], dtype=np.float64)
         else:
             theta = self.np_random.normal(0.0, 0.02)
-            if self.reset_mode == "uniform":
+            use_recovery_reset = self.reset_mode == "upright_recovery" or (
+                self.reset_mode == "mixed_reference_recovery"
+                and self.np_random.random() < self.recovery_reset_probability
+            )
+            if use_recovery_reset:
+                theta_abs = self.np_random.uniform(*self.recovery_theta_abs_range)
+                theta_sign = (
+                    -1.0
+                    if self.np_random.random() < self.left_recovery_probability
+                    else 1.0
+                )
+                theta = theta_sign * theta_abs
+                alpha = self.np_random.uniform(*self.recovery_alpha_range)
+                theta_dot = self.np_random.uniform(*self.recovery_theta_dot_range)
+                alpha_dot = self.np_random.uniform(*self.recovery_alpha_dot_range)
+            elif self.reset_mode in {"uniform", "mixed_reference_recovery"}:
                 theta = self.np_random.uniform(-np.pi / 6.0, np.pi / 6.0)
                 alpha = self.np_random.uniform(-np.pi, np.pi)
             elif self.reset_mode == "upright":
                 alpha = self.np_random.normal(0.0, self.params.reset_down_std)
             else:
-                alpha = wrap_pi(np.pi + self.np_random.normal(0.0, self.params.reset_down_std))
-            theta_dot = self.np_random.normal(0.0, self.params.reset_velocity_std)
-            alpha_dot = self.np_random.normal(0.0, self.params.reset_velocity_std)
-            self.state = np.array([theta, alpha, theta_dot, alpha_dot], dtype=np.float64)
+                alpha = wrap_pi(
+                    np.pi + self.np_random.normal(0.0, self.params.reset_down_std)
+                )
+            if not use_recovery_reset:
+                theta_dot = self.np_random.normal(0.0, self.params.reset_velocity_std)
+                alpha_dot = self.np_random.normal(0.0, self.params.reset_velocity_std)
+            self.state = np.array(
+                [theta, alpha, theta_dot, alpha_dot], dtype=np.float64
+            )
 
         self.elapsed_steps = 0
         self.last_current = 0.0
@@ -141,13 +188,29 @@ class QubeServo2SwingUpEnv(gym.Env):
         self.disturbance_events = 0
         return self._get_obs(), self._get_info()
 
-    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+    def step(
+        self, action: np.ndarray
+    ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         raw_action = float(np.asarray(action, dtype=np.float64).reshape(-1)[0])
-        commanded_voltage = raw_action * self.params.voltage_limit if self.normalized_action else raw_action
-        commanded_voltage = float(np.clip(commanded_voltage, -self.params.voltage_limit, self.params.voltage_limit))
+        commanded_voltage = (
+            raw_action * self.params.voltage_limit
+            if self.normalized_action
+            else raw_action
+        )
+        commanded_voltage = float(
+            np.clip(
+                commanded_voltage, -self.params.voltage_limit, self.params.voltage_limit
+            )
+        )
         if self.action_noise_std > 0:
-            commanded_voltage += float(self.np_random.normal(0.0, self.action_noise_std))
-        commanded_voltage = float(np.clip(commanded_voltage, -self.params.voltage_limit, self.params.voltage_limit))
+            commanded_voltage += float(
+                self.np_random.normal(0.0, self.action_noise_std)
+            )
+        commanded_voltage = float(
+            np.clip(
+                commanded_voltage, -self.params.voltage_limit, self.params.voltage_limit
+            )
+        )
 
         if self.params.action_delay_steps > 0:
             self._action_delay.append(commanded_voltage)
@@ -171,9 +234,19 @@ class QubeServo2SwingUpEnv(gym.Env):
                 pendulum_disturbance_torque=pendulum_torque,
             )
 
-        self.state[2] = float(np.clip(self.state[2], -3.0 * self.params.max_arm_velocity, 3.0 * self.params.max_arm_velocity))
+        self.state[2] = float(
+            np.clip(
+                self.state[2],
+                -3.0 * self.params.max_arm_velocity,
+                3.0 * self.params.max_arm_velocity,
+            )
+        )
         self.state[3] = float(
-            np.clip(self.state[3], -3.0 * self.params.max_pendulum_velocity, 3.0 * self.params.max_pendulum_velocity)
+            np.clip(
+                self.state[3],
+                -3.0 * self.params.max_pendulum_velocity,
+                3.0 * self.params.max_pendulum_velocity,
+            )
         )
         self.last_current = current
         self.last_voltage = voltage
@@ -213,7 +286,9 @@ class QubeServo2SwingUpEnv(gym.Env):
     def _sample_range(self, value: Any) -> float:
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
-                raise ValueError(f"Disturbance range must have two values, got {value!r}.")
+                raise ValueError(
+                    f"Disturbance range must have two values, got {value!r}."
+                )
             low, high = float(value[0]), float(value[1])
             return float(self.np_random.uniform(low, high))
         return float(value)
@@ -229,15 +304,23 @@ class QubeServo2SwingUpEnv(gym.Env):
         if self.elapsed_steps - self._last_disturbance_step < min_interval_steps:
             return
 
-        probability_per_second = float(self.disturbance_config.get("probability_per_second", 0.0))
+        probability_per_second = float(
+            self.disturbance_config.get("probability_per_second", 0.0)
+        )
         step_probability = np.clip(probability_per_second * self.params.dt, 0.0, 1.0)
         if self.np_random.random() >= step_probability:
             return
 
-        duration_steps = round(self._sample_range(self.disturbance_config.get("duration_steps", 1)))
+        duration_steps = round(
+            self._sample_range(self.disturbance_config.get("duration_steps", 1))
+        )
         self.inject_disturbance(
-            arm_torque=self._sample_range(self.disturbance_config.get("arm_torque", 0.0)),
-            pendulum_torque=self._sample_range(self.disturbance_config.get("pendulum_torque", 0.0)),
+            arm_torque=self._sample_range(
+                self.disturbance_config.get("arm_torque", 0.0)
+            ),
+            pendulum_torque=self._sample_range(
+                self.disturbance_config.get("pendulum_torque", 0.0)
+            ),
             duration_steps=max(1, int(duration_steps)),
         )
 
@@ -260,7 +343,9 @@ class QubeServo2SwingUpEnv(gym.Env):
         velocity_penalty = -0.3 * np.tanh((theta_dot**2 + alpha_dot**2) / 10.0)
         position_penalty = -0.1 * np.tanh(theta**2 / 2.0)
 
-        limit_distance = np.clip(0.8 - 0.2 * (self.params.max_arm_angle - abs(theta)), 0.0, 1.0)
+        limit_distance = np.clip(
+            0.8 - 0.2 * (self.params.max_arm_angle - abs(theta)), 0.0, 1.0
+        )
         limit_penalty = -15.0 * limit_distance**3
 
         energy_like = (
@@ -280,10 +365,20 @@ class QubeServo2SwingUpEnv(gym.Env):
         reward += 5.0 * upright_closeness * arm_stability
         reward += limit_penalty
         reward += 2.0 - 0.15 * abs(energy_like)
-        reward -= self.voltage_penalty_weight * (voltage / max(self.params.voltage_limit, 1e-9)) ** 2
-        voltage_delta = (voltage - previous_voltage) / max(self.params.voltage_limit, 1e-9)
+        reward -= (
+            self.voltage_penalty_weight
+            * (voltage / max(self.params.voltage_limit, 1e-9)) ** 2
+        )
+        reward -= self._arm_centering_penalty(theta, upright_closeness)
+        voltage_delta = (voltage - previous_voltage) / max(
+            self.params.voltage_limit, 1e-9
+        )
         reward -= self.voltage_smoothness_weight * voltage_delta**2
-        reward -= self.upright_voltage_smoothness_weight * upright_closeness * voltage_delta**2
+        reward -= (
+            self.upright_voltage_smoothness_weight
+            * upright_closeness
+            * voltage_delta**2
+        )
         return float(reward)
 
     def _upright_balance_reward(self, voltage: float, previous_voltage: float) -> float:
@@ -316,8 +411,19 @@ class QubeServo2SwingUpEnv(gym.Env):
         reward -= 0.025 * alpha_dot**2
         reward -= self.voltage_penalty_weight * (voltage / voltage_scale) ** 2
         reward -= self.voltage_smoothness_weight * voltage_delta**2
-        reward -= self.upright_voltage_smoothness_weight * alpha_closeness * voltage_delta**2
+        reward -= (
+            self.upright_voltage_smoothness_weight * alpha_closeness * voltage_delta**2
+        )
+        reward -= self._arm_centering_penalty(theta, alpha_closeness)
         return float(reward)
+
+    def _arm_centering_penalty(self, theta: float, upright_closeness: float) -> float:
+        center_error = max(0.0, abs(float(theta)) - self.arm_center_deadband)
+        center_penalty = center_error**2
+        return (
+            self.arm_centering_weight * center_penalty
+            + self.upright_arm_centering_weight * upright_closeness * center_penalty
+        )
 
     def _get_obs(self) -> np.ndarray:
         theta, alpha, theta_dot, alpha_dot = self.state
@@ -360,9 +466,13 @@ class QubeServo2SwingUpEnv(gym.Env):
             "is_balanced": abs(alpha) < np.deg2rad(12.0),
             "disturbance_active": self._disturbance_steps_remaining > 0,
             "disturbance_events": self.disturbance_events,
-            "disturbance_arm_torque": self._disturbance_arm_torque if self._disturbance_steps_remaining > 0 else 0.0,
+            "disturbance_arm_torque": self._disturbance_arm_torque
+            if self._disturbance_steps_remaining > 0
+            else 0.0,
             "disturbance_pendulum_torque": (
-                self._disturbance_pendulum_torque if self._disturbance_steps_remaining > 0 else 0.0
+                self._disturbance_pendulum_torque
+                if self._disturbance_steps_remaining > 0
+                else 0.0
             ),
         }
 
@@ -407,7 +517,9 @@ class QubeServo2SwingUpEnv(gym.Env):
             self.clock.tick(self.metadata["render_fps"])
             return None
 
-        return np.transpose(np.array(pygame.surfarray.pixels3d(surface)), axes=(1, 0, 2))
+        return np.transpose(
+            np.array(pygame.surfarray.pixels3d(surface)), axes=(1, 0, 2)
+        )
 
     def close(self) -> None:
         if self.screen is not None:
@@ -502,4 +614,96 @@ def make_reference_upright_balance_env(
         voltage_penalty_weight=voltage_penalty_weight,
         voltage_smoothness_weight=voltage_smoothness_weight,
         upright_voltage_smoothness_weight=upright_voltage_smoothness_weight,
+    )
+
+
+def make_left_recovery_balance_env(
+    disturbance_scale: float = 1.0,
+    domain_randomization: bool = True,
+    left_recovery_probability: float = 0.7,
+    recovery_reset_probability: float = 0.5,
+) -> QubeServo2SwingUpEnv:
+    ranges = {
+        "arm_damping": (0.8, 1.25),
+        "pendulum_damping": (0.7, 1.5),
+        "arm_stiffness": (0.8, 1.2),
+        "terminal_resistance": (0.95, 1.05),
+        "torque_constant": (0.95, 1.05),
+        "back_emf_constant": (0.95, 1.05),
+        "positive_motor_voltage_scale": (0.85, 1.15),
+        "negative_motor_voltage_scale": (0.75, 1.15),
+        "motor_voltage_deadband": (0.0, 4.0),
+        "pendulum_mass": (0.95, 1.05),
+        "pendulum_length": (0.98, 1.02),
+    }
+    return QubeServo2SwingUpEnv(
+        params=replace(
+            QubeServo2Parameters.reference_sim2real(),
+            action_delay_steps=1,
+            motor_voltage_deadband=0.05,
+        ),
+        domain_randomization=ranges if domain_randomization else None,
+        normalized_action=True,
+        reset_mode="mixed_reference_recovery",
+        action_noise_std=0.02,
+        observation_noise_std=0.0015,
+        disturbance_config=(
+            scaled_reference_recovery_disturbances(disturbance_scale)
+            if disturbance_scale > 0.0
+            else None
+        ),
+        reward_profile="upright_balance",
+        left_recovery_probability=left_recovery_probability,
+        recovery_reset_probability=recovery_reset_probability,
+        voltage_smoothness_weight=0.08,
+        upright_voltage_smoothness_weight=0.20,
+        arm_center_deadband=np.deg2rad(3.0),
+        arm_centering_weight=10.0,
+        upright_arm_centering_weight=80.0,
+    )
+
+
+def make_left_recovery_balance_env(
+    disturbance_scale: float = 1.0,
+    domain_randomization: bool = True,
+    left_recovery_probability: float = 0.7,
+    recovery_reset_probability: float = 0.5,
+) -> QubeServo2SwingUpEnv:
+    ranges = {
+        "arm_damping": (0.8, 1.25),
+        "pendulum_damping": (0.7, 1.5),
+        "arm_stiffness": (0.8, 1.2),
+        "terminal_resistance": (0.95, 1.05),
+        "torque_constant": (0.95, 1.05),
+        "back_emf_constant": (0.95, 1.05),
+        "positive_motor_voltage_scale": (0.85, 1.15),
+        "negative_motor_voltage_scale": (0.75, 1.15),
+        "motor_voltage_deadband": (0.0, 4.0),
+        "pendulum_mass": (0.95, 1.05),
+        "pendulum_length": (0.98, 1.02),
+    }
+    return QubeServo2SwingUpEnv(
+        params=replace(
+            QubeServo2Parameters.reference_sim2real(),
+            action_delay_steps=1,
+            motor_voltage_deadband=0.05,
+        ),
+        domain_randomization=ranges if domain_randomization else None,
+        normalized_action=True,
+        reset_mode="mixed_reference_recovery",
+        action_noise_std=0.02,
+        observation_noise_std=0.0015,
+        disturbance_config=(
+            scaled_reference_recovery_disturbances(disturbance_scale)
+            if disturbance_scale > 0.0
+            else None
+        ),
+        reward_profile="upright_balance",
+        left_recovery_probability=left_recovery_probability,
+        recovery_reset_probability=recovery_reset_probability,
+        voltage_smoothness_weight=0.08,
+        upright_voltage_smoothness_weight=0.20,
+        arm_center_deadband=np.deg2rad(3.0),
+        arm_centering_weight=10.0,
+        upright_arm_centering_weight=80.0,
     )

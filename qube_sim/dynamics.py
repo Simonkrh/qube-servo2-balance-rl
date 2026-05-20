@@ -17,7 +17,17 @@ def smooth_sign(value: float, width: float) -> float:
 
 def motor_torque(voltage: float, theta_dot: float, params: QubeServo2Parameters) -> tuple[float, float]:
     voltage = float(np.clip(voltage, -params.voltage_limit, params.voltage_limit))
-    motor_voltage = params.motor_voltage_scale * voltage
+    if voltage > params.motor_voltage_deadband:
+        effective_voltage = voltage - params.motor_voltage_deadband
+        directional_scale = params.positive_motor_voltage_scale
+    elif voltage < -params.motor_voltage_deadband:
+        effective_voltage = voltage + params.motor_voltage_deadband
+        directional_scale = params.negative_motor_voltage_scale
+    else:
+        effective_voltage = 0.0
+        directional_scale = 1.0
+
+    motor_voltage = params.motor_voltage_scale * directional_scale * effective_voltage
     current = (motor_voltage - params.back_emf_constant * theta_dot) / params.terminal_resistance
     current = float(np.clip(current, -params.peak_current, params.peak_current))
     return params.torque_constant * current, current

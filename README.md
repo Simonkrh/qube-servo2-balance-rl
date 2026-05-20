@@ -57,6 +57,8 @@ Useful training parameters:
 | `--seed` | `7` | Random seed. |
 | `--reference-profile` | `False` | Use the 6 V sim-to-real parameter profile. |
 | `--upright-balance-profile` | `False` | Train from upright with balance-focused reward shaping. |
+| `--left-recovery-profile` | `False` | Fine-tune with a mix of reference-profile swing-up starts and near-upright recovery starts, plus stronger arm centering and actuator asymmetry randomization. |
+| `--recovery-reset-probability` | `0.5` | Fraction of left-recovery-profile episodes that start in near-upright recovery states instead of normal reference swing-up states. |
 | `--recovery-disturbances` | `False` | Train with random external torque pulses. |
 | `--smooth-balance` | `False` | Penalize rapid voltage changes near upright in the swing-up profile. |
 | `--balance-voltage-weight` | `0.10` | Voltage magnitude penalty for the upright-balance profile. |
