@@ -129,10 +129,13 @@ def main() -> None:
         if not safe_update(qube):
             raise RuntimeError("Could not establish reliable serial communication with the QUBE.")
         time.sleep(0.5)
+        if not safe_update(qube):
+            raise RuntimeError("Could not read QUBE state after encoder reset.")
 
         start = time.monotonic()
         next_tick = start
         start_angle = qube.getMotorAngle()
+        print(f"Starting motor angle reference: {start_angle:.1f} deg")
         bad_frames = 0
         with args.out.open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fields)

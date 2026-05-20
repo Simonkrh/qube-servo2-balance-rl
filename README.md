@@ -59,6 +59,9 @@ Useful training parameters:
 | `--upright-balance-profile` | `False` | Train from upright with balance-focused reward shaping. |
 | `--recovery-disturbances` | `False` | Train with random external torque pulses. |
 | `--smooth-balance` | `False` | Penalize rapid voltage changes near upright in the swing-up profile. |
+| `--balance-voltage-weight` | `0.10` | Voltage magnitude penalty for the upright-balance profile. |
+| `--balance-voltage-smoothness-weight` | `2.0` | Voltage-change penalty for the upright-balance profile. |
+| `--balance-upright-voltage-smoothness-weight` | `4.0` | Extra near-upright voltage-change penalty for the upright-balance profile. |
 | `--resume-from` | `None` | Resume from a saved SAC `.zip` checkpoint. |
 | `--replay-buffer` | `None` | Optional replay buffer `.pkl` to load when resuming. |
 

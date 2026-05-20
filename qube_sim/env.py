@@ -60,6 +60,7 @@ class QubeServo2SwingUpEnv(gym.Env):
         disturbance_config: DisturbanceConfig | None = None,
         voltage_smoothness_weight: float = 0.0,
         upright_voltage_smoothness_weight: float = 0.0,
+        voltage_penalty_weight: float = 0.02,
         reward_profile: str = "swingup",
     ) -> None:
         self.base_params = params or QubeServo2Parameters()
@@ -74,6 +75,7 @@ class QubeServo2SwingUpEnv(gym.Env):
         self.disturbance_config = disturbance_config
         self.voltage_smoothness_weight = voltage_smoothness_weight
         self.upright_voltage_smoothness_weight = upright_voltage_smoothness_weight
+        self.voltage_penalty_weight = voltage_penalty_weight
         self.reward_profile = reward_profile
 
         action_bound = 1.0 if normalized_action else self.base_params.voltage_limit
@@ -278,7 +280,7 @@ class QubeServo2SwingUpEnv(gym.Env):
         reward += 5.0 * upright_closeness * arm_stability
         reward += limit_penalty
         reward += 2.0 - 0.15 * abs(energy_like)
-        reward -= 0.02 * (voltage / max(self.params.voltage_limit, 1e-9)) ** 2
+        reward -= self.voltage_penalty_weight * (voltage / max(self.params.voltage_limit, 1e-9)) ** 2
         voltage_delta = (voltage - previous_voltage) / max(self.params.voltage_limit, 1e-9)
         reward -= self.voltage_smoothness_weight * voltage_delta**2
         reward -= self.upright_voltage_smoothness_weight * upright_closeness * voltage_delta**2
@@ -312,9 +314,9 @@ class QubeServo2SwingUpEnv(gym.Env):
         reward -= 0.8 * theta**2
         reward -= 0.04 * theta_dot**2
         reward -= 0.025 * alpha_dot**2
-        reward -= 0.03 * (voltage / voltage_scale) ** 2
-        reward -= 0.35 * voltage_delta**2
-        reward -= 0.65 * alpha_closeness * voltage_delta**2
+        reward -= self.voltage_penalty_weight * (voltage / voltage_scale) ** 2
+        reward -= self.voltage_smoothness_weight * voltage_delta**2
+        reward -= self.upright_voltage_smoothness_weight * alpha_closeness * voltage_delta**2
         return float(reward)
 
     def _get_obs(self) -> np.ndarray:
@@ -470,6 +472,9 @@ def make_reference_recovery_env(disturbance_scale: float = 1.0) -> QubeServo2Swi
 def make_reference_upright_balance_env(
     disturbance_scale: float = 0.0,
     domain_randomization: bool = True,
+    voltage_penalty_weight: float = 0.10,
+    voltage_smoothness_weight: float = 2.0,
+    upright_voltage_smoothness_weight: float = 4.0,
 ) -> QubeServo2SwingUpEnv:
     ranges = {
         "arm_damping": (0.8, 1.2),
@@ -494,6 +499,7 @@ def make_reference_upright_balance_env(
             else None
         ),
         reward_profile="upright_balance",
-        voltage_smoothness_weight=0.35,
-        upright_voltage_smoothness_weight=0.65,
+        voltage_penalty_weight=voltage_penalty_weight,
+        voltage_smoothness_weight=voltage_smoothness_weight,
+        upright_voltage_smoothness_weight=upright_voltage_smoothness_weight,
     )

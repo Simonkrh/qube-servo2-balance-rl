@@ -171,6 +171,24 @@ def parse_args() -> argparse.Namespace:
         help="Near-upright voltage-change penalty weight used with --smooth-balance.",
     )
     parser.add_argument(
+        "--balance-voltage-weight",
+        type=float,
+        default=0.10,
+        help="Voltage magnitude penalty used by --upright-balance-profile.",
+    )
+    parser.add_argument(
+        "--balance-voltage-smoothness-weight",
+        type=float,
+        default=2.0,
+        help="Voltage-change penalty used by --upright-balance-profile.",
+    )
+    parser.add_argument(
+        "--balance-upright-voltage-smoothness-weight",
+        type=float,
+        default=4.0,
+        help="Extra near-upright voltage-change penalty used by --upright-balance-profile.",
+    )
+    parser.add_argument(
         "--resume-from",
         type=Path,
         default=None,
@@ -209,6 +227,9 @@ def main() -> None:
             env = make_reference_upright_balance_env(
                 disturbance_scale=args.disturbance_scale if args.recovery_disturbances else 0.0,
                 domain_randomization=not args.no_domain_randomization,
+                voltage_penalty_weight=args.balance_voltage_weight,
+                voltage_smoothness_weight=args.balance_voltage_smoothness_weight,
+                upright_voltage_smoothness_weight=args.balance_upright_voltage_smoothness_weight,
             )
             return Monitor(env)
 
