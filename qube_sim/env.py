@@ -617,51 +617,6 @@ def make_reference_upright_balance_env(
     )
 
 
-def make_left_recovery_balance_env(
-    disturbance_scale: float = 1.0,
-    domain_randomization: bool = True,
-    left_recovery_probability: float = 0.7,
-    recovery_reset_probability: float = 0.5,
-) -> QubeServo2SwingUpEnv:
-    ranges = {
-        "arm_damping": (0.8, 1.25),
-        "pendulum_damping": (0.7, 1.5),
-        "arm_stiffness": (0.8, 1.2),
-        "terminal_resistance": (0.95, 1.05),
-        "torque_constant": (0.95, 1.05),
-        "back_emf_constant": (0.95, 1.05),
-        "positive_motor_voltage_scale": (0.85, 1.15),
-        "negative_motor_voltage_scale": (0.75, 1.15),
-        "motor_voltage_deadband": (0.0, 4.0),
-        "pendulum_mass": (0.95, 1.05),
-        "pendulum_length": (0.98, 1.02),
-    }
-    return QubeServo2SwingUpEnv(
-        params=replace(
-            QubeServo2Parameters.reference_sim2real(),
-            action_delay_steps=1,
-            motor_voltage_deadband=0.05,
-        ),
-        domain_randomization=ranges if domain_randomization else None,
-        normalized_action=True,
-        reset_mode="mixed_reference_recovery",
-        action_noise_std=0.02,
-        observation_noise_std=0.0015,
-        disturbance_config=(
-            scaled_reference_recovery_disturbances(disturbance_scale)
-            if disturbance_scale > 0.0
-            else None
-        ),
-        reward_profile="upright_balance",
-        left_recovery_probability=left_recovery_probability,
-        recovery_reset_probability=recovery_reset_probability,
-        voltage_smoothness_weight=0.08,
-        upright_voltage_smoothness_weight=0.20,
-        arm_center_deadband=np.deg2rad(3.0),
-        arm_centering_weight=10.0,
-        upright_arm_centering_weight=80.0,
-    )
-
 
 def make_left_recovery_balance_env(
     disturbance_scale: float = 1.0,
